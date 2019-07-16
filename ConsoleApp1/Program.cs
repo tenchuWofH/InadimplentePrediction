@@ -1,146 +1,221 @@
-﻿using System;
+﻿// <SnippetAddUsings>
+using System;
 using System.IO;
+using System.Linq;
 using Microsoft.ML;
-using Microsoft.ML.Data;
-using static Microsoft.ML.Transforms.OneHotEncodingEstimator;
+// </SnippetAddUsings>
 
-namespace ConsoleApp1
+namespace InadimplentePrediction
 {
     class Program
     {
-        static readonly string _trainDataPath = Path.Combine(Environment.CurrentDirectory, "Data", "Pesquisa_Beneficiarios_ML_20190709-train.csv");
-        static readonly string _testDataPath = Path.Combine(Environment.CurrentDirectory, "Data", "Pesquisa_Beneficiarios_ML_20190709-test.csv");
-        static readonly string _modelPath = Path.Combine(Environment.CurrentDirectory, "Data", "Model.zip");
+        // <SnippetDeclareGlobalVariables>
+        private static string _appPath => Path.GetDirectoryName(Environment.GetCommandLineArgs()[0]);
+        private static string _trainDataPath => Path.Combine(_appPath, "..", "..", "..", "Data", "Pesquisa_Beneficiarios_ML_20190709-train.csv");
+        private static string _testDataPath => Path.Combine(_appPath, "..", "..", "..", "Data", "Pesquisa_Beneficiarios_ML_20190709-test.csv");
+        private static string _modelPath => Path.Combine(_appPath, "..", "..", "..", "Models", "model.zip");
 
+        private static MLContext _mlContext;
+        private static PredictionEngine<BeneficiarioData, BeneficiarioPrediction> _predEngine;
+        private static ITransformer _trainedModel;
+        static IDataView _trainingDataView;
+
+        // </SnippetDeclareGlobalVariables>
         static void Main(string[] args)
         {
-            MLContext mlContext = new MLContext(seed: 0);
+            // Create MLContext to be shared across the model creation workflow objects 
+            // Set a random seed for repeatable/deterministic results across multiple trainings.
+            // <SnippetCreateMLContext>
+            _mlContext = new MLContext(seed: 0);
+            // </SnippetCreateMLContext>
 
-            var model = Train(mlContext, _trainDataPath);
+            // STEP 1: Common data loading configuration 
+            // CreateTextReader<BeneficiarioData>(hasHeader: true) - Creates a TextLoader by inferencing the dataset schema from the BeneficiarioData data model type.
+            // .Read(_trainDataPath) - Loads the training text file into an IDataView (_trainingDataView) and maps from input columns to IDataView columns.
+            Console.WriteLine($"=============== Loading Dataset  ===============");
 
-            try
-            {
-                Evaluate(mlContext, model);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex.Message);
-            }
+            // <SnippetLoadTrainData>
+            _trainingDataView = _mlContext.Data.LoadFromTextFile<BeneficiarioData>(_trainDataPath, hasHeader: true);
+            // </SnippetLoadTrainData>
 
-            try
-            {
-                TestSinglePrediction(mlContext, model);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex.Message);
-            }
-            Console.ReadLine();
+            Console.WriteLine($"=============== Finished Loading Dataset  ===============");
+
+            // <SnippetSplitData>
+            //   var (trainData, testData) = _mlContext.MulticlassClassification.TrainTestSplit(_trainingDataView, testFraction: 0.1);
+            // </SnippetSplitData>
+
+            // <SnippetCallProcessData>
+            var pipeline = ProcessData();
+            // </SnippetCallProcessData>
+
+            // <SnippetCallBuildAndTrainModel>
+            var trainingPipeline = BuildAndTrainModel(_trainingDataView, pipeline);
+            // </SnippetCallBuildAndTrainModel>
+
+            // <SnippetCallEvaluate>
+            Evaluate(_trainingDataView.Schema);
+            // </SnippetCallEvaluate>
+
+            // <SnippetCallPredictIssue>
+            PredictIssue();
+            // </SnippetCallPredictIssue>
         }
 
-        public static ITransformer Train(MLContext mlContext, string dataPath)
+        public static IEstimator<ITransformer> ProcessData()
         {
-            IDataView dataView = mlContext.Data.LoadFromTextFile<Beneficiario>(dataPath, hasHeader: true, separatorChar: ',');
+            Console.WriteLine($"=============== Processing Data ===============");
+            // STEP 2: Common data process configuration with pipeline data transformations
+            // <SnippetMapValueToKey>
+            var pipeline = _mlContext.Transforms.Conversion.MapValueToKey(inputColumnName: "Inadimplente", outputColumnName: "Label")
+                            // </SnippetMapValueToKey>
+                            // <SnippetFeaturizeText>
+                            //.Append(_mlContext.Transforms.Text.FeaturizeText(inputColumnName: "Title", outputColumnName: "TitleFeaturized"))
+                            //.Append(_mlContext.Transforms.Text.FeaturizeText(inputColumnName: "Description", outputColumnName: "DescriptionFeaturized"))
+                            // </SnippetFeaturizeText>
+                            // <SnippetConcatenate>
+                            .Append(_mlContext.Transforms.Concatenate("Features", "NroPlano", "NroCusteio", "Idade", "NroConveniada", "NroSituacao", "NroInscricao", "SeqCliente", "Inadimplente"))
+                            // </SnippetConcatenate>
+                            //Sample Caching the DataView so estimators iterating over the data multiple times, instead of always reading from file, using the cache might get better performance.
+                            // <SnippetAppendCache>
+                            .AppendCacheCheckpoint(_mlContext);
+            // </SnippetAppendCache>
 
-            var pipeline = mlContext.Transforms.CopyColumns(outputColumnName: "Label", inputColumnName: "Inadimplente")
-                .Append(mlContext.Transforms.Categorical.OneHotEncoding(outputColumnName: "SglSexoEncoded", inputColumnName: "SglSexo"))
-                //.Append(mlContext.Transforms.Conversion.ConvertType(outputColumnName: "SglSexoEncoded", inputColumnName: "SglSexo", DataKind.Int32))
-                .Append(mlContext.Transforms.Concatenate("Features", "NroPlano", "NroVinculo", "SglSexoEncoded", "NroCusteio", "Idade"))
-                //.Append(mlContext.Regression.Trainers.FastTree());
-                .Append(mlContext.BinaryClassification.Trainers.FastTree());
+            Console.WriteLine($"=============== Finished Processing Data ===============");
 
-            //// set up a training pipeline
-            //// step 1: concatenate all feature columns
-            //var pipeline = mlContext.Transforms.Concatenate(
-            //    "Features",
-            //    "NroPlano",
-            //    "NroVinculo",
-            //    "SglSexo",
-            //    "NroCusteio",
-            //    "Idade"
-            //    )
-            //// step 2: set up a fast tree learner
-            //.Append(mlContext.BinaryClassification.Trainers.FastTree(
-            //    labelColumnName: Beneficiario.Label,
-            //    featureColumnName: DefaultColumnNames.Features));
-
-            var model = pipeline.Fit(dataView);
-
-            return model;
+            // <SnippetReturnPipeline>
+            return pipeline;
+            // </SnippetReturnPipeline>
         }
 
-        private static void Evaluate(MLContext mlContext, ITransformer model)
+        public static IEstimator<ITransformer> BuildAndTrainModel(IDataView trainingDataView, IEstimator<ITransformer> pipeline)
         {
-            IDataView dataView = mlContext.Data.LoadFromTextFile<Beneficiario>(_testDataPath, hasHeader: true, separatorChar: ',');
-            var predictions = model.Transform(dataView);
-            //var metrics = mlContext.Regression.Evaluate(predictions, "Label", "Score");
+            // STEP 3: Create the training algorithm/trainer
+            // Use the multi-class SDCA algorithm to predict the label using features.
+            //Set the trainer/algorithm and map label to value (original readable state)
+            // <SnippetAddTrainer> 
+            var trainingPipeline = pipeline.Append(_mlContext.MulticlassClassification.Trainers.SdcaMaximumEntropy("Label", "Features"))
+                    .Append(_mlContext.Transforms.Conversion.MapKeyToValue("PredictedLabel"));
+            // </SnippetAddTrainer> 
 
-            //Console.WriteLine();
-            //Console.WriteLine($"*************************************************");
-            //Console.WriteLine($"*       Model quality metrics evaluation         ");
-            //Console.WriteLine($"*------------------------------------------------");
-            //Console.WriteLine($"*       RSquared Score:      {metrics.RSquared:0.##}");
-            //Console.WriteLine($"*       Root Mean Squared Error:      {metrics.RootMeanSquaredError:#.##}");
-            //Console.WriteLine($"*************************************************");
+            // STEP 4: Train the model fitting to the DataSet
+            Console.WriteLine($"=============== Training the model  ===============");
 
-            // compare the predictions with the ground truth
-            var metrics = mlContext.BinaryClassification.Evaluate(
-                data: predictions,
-                labelColumnName: "Label",
-                scoreColumnName: "Score");
+            // <SnippetTrainModel> 
+            _trainedModel = trainingPipeline.Fit(trainingDataView);
+            // </SnippetTrainModel> 
+            Console.WriteLine($"=============== Finished Training the model Ending time: {DateTime.Now.ToString()} ===============");
 
-            // report the results
-            Console.WriteLine($"  Accuracy:          {metrics.Accuracy:P2}");
-            //Console.WriteLine($"  Auc:               {metrics.Auc:P2}");
-            //Console.WriteLine($"  Auprc:             {metrics.Auprc:P2}");
-            Console.WriteLine($"  F1Score:           {metrics.F1Score:P2}");
-            Console.WriteLine($"  LogLoss:           {metrics.LogLoss:0.##}");
-            Console.WriteLine($"  LogLossReduction:  {metrics.LogLossReduction:0.##}");
-            Console.WriteLine($"  PositivePrecision: {metrics.PositivePrecision:0.##}");
-            Console.WriteLine($"  PositiveRecall:    {metrics.PositiveRecall:0.##}");
-            Console.WriteLine($"  NegativePrecision: {metrics.NegativePrecision:0.##}");
-            Console.WriteLine($"  NegativeRecall:    {metrics.NegativeRecall:0.##}");
-            Console.WriteLine();
-        }
+            // (OPTIONAL) Try/test a single prediction with the "just-trained model" (Before saving the model)
+            Console.WriteLine($"=============== Single Prediction just-trained-model ===============");
 
-        private static void TestSinglePrediction(MLContext mlContext, ITransformer model)
-        {
-            var predictionFunction = mlContext.Model.CreatePredictionEngine<Beneficiario, BeneficiarioPrediction>(model);
-
-            //Sample: 
-            //vendor_id,rate_code,passenger_count,trip_time_in_secs,trip_distance,payment_type,fare_amount
-            //VTS,1,1,1140,3.75,CRD,15.5
-            var beneficiarioSample = new Beneficiario()
+            // Create prediction engine related to the loaded trained model
+            // <SnippetCreatePredictionEngine1>
+            _predEngine = _mlContext.Model.CreatePredictionEngine<BeneficiarioData, BeneficiarioPrediction>(_trainedModel);
+            // </SnippetCreatePredictionEngine1>
+            // <SnippetCreateTestIssue1> 
+            BeneficiarioData issue = new BeneficiarioData()
             {
-                //VendorId = "VTS",
-                //RateCode = "1",
-                //PassengerCount = 1,
-                //TripTime = 1140,
-                //TripDistance = 3.75f,
-                //PaymentType = "CRD",
-                //FareAmount = 0 // To predict. Actual/Observed = 15.5
                 NroPlano = 9,
-                NroVinculo = 0,
-                SglSexo = 1,//"M",
                 NroCusteio = 0,
-                Idade = 42
+                Idade = 42,
+                NroConveniada = 9,
+                NroSituacao = 1,
+                NroInscricao = 300835,
+                SeqCliente = 0,
+                Inadimplente = 0
             };
+            // </SnippetCreateTestIssue1>
 
-            var prediction = predictionFunction.Predict(beneficiarioSample);
+            // <SnippetPredict>
+            var prediction = _predEngine.Predict(issue);
+            // </SnippetPredict>
 
-            //Console.WriteLine($"**********************************************************************");
-            //Console.WriteLine($"Predicted Inadimplente: {prediction.PredictedInadimplente:0.####}, actual Inadimplente: 15.5");
-            //Console.WriteLine($"**********************************************************************");
+            // <SnippetOutputPrediction>
+            Console.WriteLine($"=============== Single Prediction just-trained-model - Result: {prediction.PredictedInadimplente} ===============");
+            // </SnippetOutputPrediction>
 
-            // report the results
-            Console.WriteLine($"  NroPlano: {beneficiarioSample.NroPlano} ");
-            Console.WriteLine($"  NroVinculo: {beneficiarioSample.NroVinculo} ");
-            Console.WriteLine($"  SglSexo: {beneficiarioSample.SglSexo} ");
-            Console.WriteLine($"  NroCusteio: {beneficiarioSample.NroCusteio} ");
-            Console.WriteLine($"  Idade: {beneficiarioSample.Idade} ");
-            Console.WriteLine();
-            Console.WriteLine($"Prediction: {(prediction.PredictedInadimplente ? "É Inadimplente" : "Não é Inadimplente")} ");
-            Console.WriteLine($"Probability: {prediction.Probability} ");
+            // <SnippetReturnModel>
+            return trainingPipeline;
+            // </SnippetReturnModel>
+
         }
+
+        public static void Evaluate(DataViewSchema trainingDataViewSchema)
+        {
+            // STEP 5:  Evaluate the model in order to get the model's accuracy metrics
+            Console.WriteLine($"=============== Evaluating to get model's accuracy metrics - Starting time: {DateTime.Now.ToString()} ===============");
+
+            //Load the test dataset into the IDataView
+            // <SnippetLoadTestDataset>
+            var testDataView = _mlContext.Data.LoadFromTextFile<BeneficiarioData>(_testDataPath, hasHeader: true);
+            // </SnippetLoadTestDataset>
+
+            //Evaluate the model on a test dataset and calculate metrics of the model on the test data.
+            // <SnippetEvaluate>
+            var testMetrics = _mlContext.MulticlassClassification.Evaluate(_trainedModel.Transform(testDataView));
+            // </SnippetEvaluate>
+
+            Console.WriteLine($"=============== Evaluating to get model's accuracy metrics - Ending time: {DateTime.Now.ToString()} ===============");
+            // <SnippetDisplayMetrics>
+            Console.WriteLine($"*************************************************************************************************************");
+            Console.WriteLine($"*       Metrics for Multi-class Classification model - Test Data     ");
+            Console.WriteLine($"*------------------------------------------------------------------------------------------------------------");
+            Console.WriteLine($"*       MicroAccuracy:    {testMetrics.MicroAccuracy:0.###}");
+            Console.WriteLine($"*       MacroAccuracy:    {testMetrics.MacroAccuracy:0.###}");
+            Console.WriteLine($"*       LogLoss:          {testMetrics.LogLoss:#.###}");
+            Console.WriteLine($"*       LogLossReduction: {testMetrics.LogLossReduction:#.###}");
+            Console.WriteLine($"*************************************************************************************************************");
+            // </SnippetDisplayMetrics>
+
+            // Save the new model to .ZIP file
+            // <SnippetCallSaveModel>
+            SaveModelAsFile(_mlContext, trainingDataViewSchema, _trainedModel);
+            // </SnippetCallSaveModel>
+
+        }
+
+        public static void PredictIssue()
+        {
+            // <SnippetLoadModel>
+            ITransformer loadedModel = _mlContext.Model.Load(_modelPath, out var modelInputSchema);
+            // </SnippetLoadModel>
+
+            // <SnippetAddTestIssue> 
+            BeneficiarioData singleIssue = new BeneficiarioData() {
+                NroPlano = 9,
+                NroCusteio = 0,
+                Idade = 42,
+                NroConveniada = 9,
+                NroSituacao = 1,
+                NroInscricao = 300835,
+                SeqCliente = 0,
+                Inadimplente = 0
+            };
+            // </SnippetAddTestIssue> 
+
+            //Predict label for single hard-coded issue
+            // <SnippetCreatePredictionEngine>
+            _predEngine = _mlContext.Model.CreatePredictionEngine<BeneficiarioData, BeneficiarioPrediction>(loadedModel);
+            // </SnippetCreatePredictionEngine>
+
+            // <SnippetPredictIssue>
+            var prediction = _predEngine.Predict(singleIssue);
+            // </SnippetPredictIssue>
+
+            // <SnippetDisplayResults>
+            Console.WriteLine($"=============== Single Prediction - Result: {prediction.PredictedInadimplente} ===============");
+            // </SnippetDisplayResults>
+
+        }
+
+        private static void SaveModelAsFile(MLContext mlContext, DataViewSchema trainingDataViewSchema, ITransformer model)
+        {
+            // <SnippetSaveModel> 
+            mlContext.Model.Save(model, trainingDataViewSchema, _modelPath);
+            // </SnippetSaveModel>
+
+            Console.WriteLine("The model is saved to {0}", _modelPath);
+        }
+
     }
 }
