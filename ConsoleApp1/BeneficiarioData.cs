@@ -9,37 +9,54 @@ namespace InadimplentePrediction
     {
         //NroPlano,NroCusteio,Idade,NroConveniada,NroSituacao,NroInscricao,SeqCliente,Inadimplente
         [LoadColumn(0)]
-        public float NroPlano;
+        public float NroPlano { get; set; }
 
         [LoadColumn(1)]
-        public float NroCusteio;
+        public float NroCusteio { get; set; }
 
         [LoadColumn(2)]
-        public float Idade;
+        public float Idade { get; set; }
 
         [LoadColumn(3)]
-        public float NroConveniada;
+        public float NroConveniada { get; set; }
 
         [LoadColumn(4)]
-        public float NroSituacao;
+        public float NroSituacao { get; set; }
 
         [LoadColumn(5)]
-        public float NroInscricao;
+        public float NroInscricao { get; set; }
 
         [LoadColumn(6)]
-        public float SeqCliente;
+        public float SeqCliente { get; set; }
 
         [LoadColumn(7)]//, ColumnName("Label")]
-        public float Inadimplente;
+        public float Inadimplente { get; set; }
+        //[LoadColumn(7)]
+        //public string Label;
     }
 
-    public class BeneficiarioPrediction //: BeneficiarioData
+    public class BeneficiarioPrediction: BeneficiarioData
     {
-        //[ColumnName("Score")]
-        //public Int32 PredictedInadimplente;
+        [ColumnName("PredictedLabel")]
+        public bool PredictedInadimplente { get; set; }
 
-        [ColumnName("PredictedLabel")] public float PredictedInadimplente;
-        public float Probability;
-        public float Score;
+        //public float Probability { get; set; }
+        public float Score { get; set; }
     }
+
+    ///// <summary>
+    ///// This class describes which input columns we want to transform.
+    ///// </summary>
+    //public class FromLabel
+    //{
+    //    public float Label { get; set; }
+    //}
+
+    ///// <summary>
+    ///// This class describes what output columns we want to produce.
+    ///// </summary>
+    //public class ToLabel
+    //{
+    //    public bool Label { get; set; }
+    //}
 }
